@@ -133,6 +133,89 @@ interface OKIDeviceInfo {
   fullId: string;   // e.g., "ACE-5-RACE_OOS16"
 }
 
+// OnePlus device market name / common abbreviation -> codename mapping
+// Users often search by market name (e.g., "oneplus13") instead of codename (e.g., "ACE-5-PRO")
+const DEVICE_ALIASES: Record<string, string> = {
+  // OnePlus international numbered series
+  'oneplus13': 'ACE-5-PRO',
+  'op13': 'ACE-5-PRO',
+  'oneplus13r': 'ACE-5',
+  'op13r': 'ACE-5',
+  'oneplus12': 'ACE-3-PRO',
+  'op12': 'ACE-3-PRO',
+  'oneplus12r': 'ACE-3',
+  'op12r': 'ACE-3',
+  'oneplus11': 'ACE-2-PRO',
+  'op11': 'ACE-2-PRO',
+  // OnePlus Ace special editions
+  'oneplusace5racing': 'ACE-5-RACE',
+  'oneplusace5race': 'ACE-5-RACE',
+  'ace5racing': 'ACE-5-RACE',
+  'oneplusace5ultra': 'ACE-5-ULTRA',
+  'ace5ultra': 'ACE-5-ULTRA',
+  // OnePlus Open (foldable)
+  'oneplusopen': 'OPEN',
+  'opopen': 'OPEN',
+  // OnePlus Nord
+  'nord4ce': 'NORD-4-CE',
+  'nordce4lite': 'NORD-CE4-LITE',
+  'nordce5': 'NORD-CE-5',
+  'nordn30se': 'NORD-N30-SE',
+  // OnePlus Pad
+  'onepluspad2pro': 'PAD-2-PRO',
+  'oppad2pro': 'PAD-2-PRO',
+  'onepluspad3': 'PAD-3-SM8750',
+  'oppad3': 'PAD-3-SM8750',
+  'onepluspadpro': 'PAD-PRO',
+  'oppadpro': 'PAD-PRO',
+  // OnePlus Turbo
+  'oneplusturbo6': 'TURBO-6',
+  'opturbo6': 'TURBO-6',
+  'oneplusturbo6v': 'TURBO-6V',
+  'opturbo6v': 'TURBO-6V',
+};
+
+// OKI search result: single best match, or ambiguous candidates for disambiguation
+interface OKISearchResult {
+  asset: GitHubAsset | null;       // Best matching asset (null if not found or ambiguous)
+  ambiguous: Array<{               // Non-empty when multiple equally-good matches exist
+    model: string;
+    os: string;
+    fullId: string;
+  }>;
+}
+
+// Score how well a model name matches the user input (higher = better)
+// Key fix: prevents "ace5" from wrongly matching "ace" (ACE)
+function scoreModelMatch(normalizedInput: string, normalizedModel: string): number {
+  // 1. Exact match (best possible)
+  if (normalizedInput === normalizedModel) return 100;
+
+  // 2. Model starts with user input (user typed a prefix of the model)
+  // e.g., input="ace5" model="ace5pro" → good, user wants ACE-5 family
+  if (normalizedModel.startsWith(normalizedInput)) return 80;
+
+  // 3. User input starts with model (user typed something more specific)
+  // e.g., input="ace5race" model="ace5" → good, ACE-5 is a prefix of ACE-5-RACE
+  // But: input="ace5" model="ace" → BAD! "ace5" is a DIFFERENT device (ACE-5), not ACE
+  // Fix: reject if the remainder after the model starts with a digit
+  if (normalizedInput.startsWith(normalizedModel) && normalizedModel.length > 0) {
+    const remainder = normalizedInput.slice(normalizedModel.length);
+    if (remainder.length > 0 && /^[0-9]/.test(remainder)) {
+      // Remainder starts with digit → user input is a different device number
+      // e.g., "ace" + "5..." means user wants ACE-5, not ACE
+      return 0;
+    }
+    return 70;
+  }
+
+  // 4. General substring containment (weak match, only for longer inputs)
+  if (normalizedModel.includes(normalizedInput) && normalizedInput.length >= 3) return 30;
+  if (normalizedInput.includes(normalizedModel) && normalizedModel.length >= 4) return 20;
+
+  return 0; // No meaningful match
+}
+
 // Extract kernel version from filename
 // Supports multiple formats based on actual GitHub release files:
 // - Standard: android12-5.10.101-2022-04-AnyKernel3.zip -> {version: "5.10.101", isLts: false}
@@ -501,20 +584,26 @@ function extractOSVersion(os: string): number {
 }
 
 // Find matching OKI asset by model and OS (case-insensitive)
+// - Phase 0: Resolve market name aliases (e.g., "oneplus13" → "ACE-5-PRO")
+// - Phase 1: Score all assets using scoreModelMatch
+// - Phase 2: Pick the best match; disambiguate if multiple equally-good matches
 // - If osInput is provided: match exact OS (case-insensitive)
 // - If osInput is null/empty: pick the latest OS version for the matching model
-// Model matching: exact match takes priority, substring match as fallback
-function findMatchingOKIAsset(assets: GitHubAsset[], modelInput: string, osInput: string | null): GitHubAsset | null {
-  const normalizedModel = normalizeForComparison(modelInput);
+function findMatchingOKIAsset(assets: GitHubAsset[], modelInput: string, osInput: string | null): OKISearchResult {
+  // Phase 0: Resolve aliases (market names → codenames)
+  const normalizedInputRaw = normalizeForComparison(modelInput);
+  const resolvedInput = DEVICE_ALIASES[normalizedInputRaw] || modelInput;
+  const normalizedInput = normalizeForComparison(resolvedInput);
   const normalizedOs = osInput ? normalizeForComparison(osInput) : null;
 
-  // Phase 1: Try exact model match first
-  let exactBestMatch: GitHubAsset | null = null;
-  let exactBestOSVersion = -1;
+  // Phase 1: Score all assets
+  interface ScoredCandidate {
+    asset: GitHubAsset;
+    info: OKIDeviceInfo;
+    score: number;
+  }
 
-  // Phase 2: Substring match fallback
-  let substringBestMatch: GitHubAsset | null = null;
-  let substringBestOSVersion = -1;
+  const candidates: ScoredCandidate[] = [];
 
   for (const asset of assets) {
     if (!asset.name.toLowerCase().endsWith('.zip')) continue;
@@ -522,39 +611,92 @@ function findMatchingOKIAsset(assets: GitHubAsset[], modelInput: string, osInput
     const info = extractOKIDeviceInfo(asset.name);
     if (!info) continue;
 
-    const normalizedFileModel = normalizeForComparison(info.model);
-
-    const isExactMatch = normalizedFileModel === normalizedModel;
-    const isSubstringMatch = !isExactMatch && (
-        normalizedFileModel.includes(normalizedModel) ||
-        normalizedModel.includes(normalizedFileModel)
-    );
-
-    // If OS is specified, must match exactly (case-insensitive)
+    // OS filter: if specified, must match exactly
     const osMatched = normalizedOs === null || normalizeForComparison(info.os) === normalizedOs;
+    if (!osMatched) continue;
 
-    if (isExactMatch && osMatched) {
-      if (normalizedOs !== null) return asset; // exact model + exact OS → return immediately
-      const osVer = extractOSVersion(info.os);
-      if (osVer > exactBestOSVersion) {
-        exactBestOSVersion = osVer;
-        exactBestMatch = asset;
-      }
-    } else if (isSubstringMatch && osMatched && !exactBestMatch) {
-      // Only consider substring if no exact match found yet
-      if (normalizedOs !== null) { substringBestMatch = asset; }
-      else {
-        const osVer = extractOSVersion(info.os);
-        if (osVer > substringBestOSVersion) {
-          substringBestOSVersion = osVer;
-          substringBestMatch = asset;
-        }
-      }
+    const normalizedFileModel = normalizeForComparison(info.model);
+    const score = scoreModelMatch(normalizedInput, normalizedFileModel);
+
+    if (score > 0) {
+      candidates.push({ asset, info, score });
     }
   }
 
-  // Prefer exact match; fall back to substring match
-  return exactBestMatch || substringBestMatch;
+  if (candidates.length === 0) {
+    return { asset: null, ambiguous: [] };
+  }
+
+  // Sort: highest score first, then latest OS version, then shortest model name (most specific)
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const aOsVer = extractOSVersion(a.info.os);
+    const bOsVer = extractOSVersion(b.info.os);
+    if (aOsVer !== bOsVer) return bOsVer - aOsVer;
+    // Among same score & OS, prefer shorter model (more exact to input)
+    return a.info.model.length - b.info.model.length;
+  });
+
+  // Phase 2: Determine result
+  const topScore = candidates[0].score;
+
+  // Exact match (score 100) — return immediately, no ambiguity
+  if (topScore === 100) {
+    return { asset: candidates[0].asset, ambiguous: [] };
+  }
+
+  // Collect all candidates with the top score
+  const topCandidates = candidates.filter(c => c.score === topScore);
+  const uniqueModels = new Set(topCandidates.map(c => c.info.model));
+
+  // Single model at top score — no ambiguity
+  if (uniqueModels.size === 1) {
+    return { asset: topCandidates[0].asset, ambiguous: [] };
+  }
+
+  // Multiple different models with same top score — check if we can auto-resolve
+  // Strategy: if one model's normalized name is shortest AND closest to input length, prefer it
+  if (topScore >= 70) {
+    // Among top candidates, prefer the one whose model length is closest to input length
+    const sortedByCloseness = [...topCandidates].sort((a, b) => {
+      const aDiff = Math.abs(a.info.model.length - modelInput.length);
+      const bDiff = Math.abs(b.info.model.length - modelInput.length);
+      return aDiff - bDiff;
+    });
+
+    // If the closest model is significantly closer than the next, auto-resolve
+    const best = sortedByCloseness[0];
+    const second = sortedByCloseness[1];
+    const bestDiff = Math.abs(best.info.model.length - modelInput.length);
+    const secondDiff = Math.abs(second.info.model.length - modelInput.length);
+
+    if (bestDiff < secondDiff - 1) {
+      // Clear winner
+      return { asset: best.asset, ambiguous: [] };
+    }
+
+    // Truly ambiguous — return candidates for disambiguation message
+    // Deduplicate by model name (keep highest OS version for each)
+    const bestByModel = new Map<string, ScoredCandidate>();
+    for (const c of topCandidates) {
+      const existing = bestByModel.get(c.info.model);
+      if (!existing || extractOSVersion(c.info.os) > extractOSVersion(existing.info.os)) {
+        bestByModel.set(c.info.model, c);
+      }
+    }
+
+    return {
+      asset: null,
+      ambiguous: Array.from(bestByModel.values()).map(c => ({
+        model: c.info.model,
+        os: c.info.os,
+        fullId: c.info.fullId
+      }))
+    };
+  }
+
+  // Low score matches — just return the best one (fuzzy match)
+  return { asset: topCandidates[0].asset, ambiguous: [] };
 }
 
 // Get all available device/model combinations from OKI releases
@@ -1428,7 +1570,7 @@ async function handleGetOKI(
     await sendMessage(
       botToken,
       chatId,
-      'Please specify a device model. OS version is optional (defaults to latest).\nUsage: <code>/get_oki &lt;model&gt; [os]</code>\n\nExamples:\n• <code>/get_oki ace5race</code> — latest OS\n• <code>/get_oki ace-5-race oos16</code> — specific OS\n• <code>/get_oki ACE-6T OOS16</code>\n\n💡 Model and OS are case-insensitive.',
+      'Please specify a device model. OS version is optional (defaults to latest).\nUsage: <code>/get_oki &lt;model&gt; [os]</code>\n\nExamples:\n• <code>/get_oki ace5race</code> — latest OS\n• <code>/get_oki ace-5-race oos16</code> — specific OS\n• <code>/get_oki ACE-6T OOS16</code>\n• <code>/get_oki oneplus13</code> — market name alias\n\n💡 Model and OS are case-insensitive. Supports aliases like <code>op13</code>, <code>oneplus13</code>, etc.',
       'HTML',
       replyToMessageId,
       messageThreadId
@@ -1456,9 +1598,10 @@ async function handleGetOKI(
       return;
     }
 
-    const asset = findMatchingOKIAsset(release.assets, modelInput, osInput);
+    const result = findMatchingOKIAsset(release.assets, modelInput, osInput);
 
-    if (asset) {
+    if (result.asset) {
+      const asset = result.asset;
       const info = extractOKIDeviceInfo(asset.name);
       const kernelMatch = asset.name.match(/android(\d+)-(\d+\.\d+\.\d+)/i);
       const androidVer = kernelMatch ? kernelMatch[1] : '?';
@@ -1476,6 +1619,14 @@ async function handleGetOKI(
 • Includes: SUSFS (Root Hiding)
 
 💡 <i>ReSukiSU provides frequent updates and better root hiding for banking apps.</i>`;
+      await sendMessage(botToken, chatId, message, 'HTML', replyToMessageId, messageThreadId);
+    } else if (result.ambiguous.length > 0) {
+      // Disambiguation: multiple models matched equally well
+      const target = osInput ? `<b>${modelInput}</b> with OS <b>${osInput}</b>` : `<b>${modelInput}</b>`;
+      let message = `🔍 ${target} matched multiple devices. Please specify:\n\n`;
+      for (const c of result.ambiguous) {
+        message += `• <code>${c.model}</code> (${c.os}) — /get_oki ${c.model} ${c.os}\n`;
+      }
       await sendMessage(botToken, chatId, message, 'HTML', replyToMessageId, messageThreadId);
     } else {
       const { devices } = getAvailableOKIDevices(release.assets);
@@ -1524,7 +1675,7 @@ async function handleDownloadOKI(
     await sendMessage(
       botToken,
       chatId,
-      'Please specify a device model. OS version is optional (defaults to latest).\nUsage: <code>/oki &lt;model&gt; [os]</code>\n\nExamples:\n• <code>/oki ace5race</code> — latest OS\n• <code>/oki ace-5-race oos16</code> — specific OS\n• <code>/oki ACE-6T OOS16</code>\n\n💡 Model and OS are case-insensitive.',
+      'Please specify a device model. OS version is optional (defaults to latest).\nUsage: <code>/oki &lt;model&gt; [os]</code>\n\nExamples:\n• <code>/oki ace5race</code> — latest OS\n• <code>/oki ace-5-race oos16</code> — specific OS\n• <code>/oki ACE-6T OOS16</code>\n• <code>/oki op13</code> — market name alias\n\n💡 Model and OS are case-insensitive. Supports aliases like <code>op13</code>, <code>oneplus13</code>, etc.',
       'HTML',
       replyToMessageId,
       messageThreadId
@@ -1563,9 +1714,21 @@ async function handleDownloadOKI(
       return;
     }
 
-    const asset = findMatchingOKIAsset(release.assets, modelInput, osInput);
+    const result = findMatchingOKIAsset(release.assets, modelInput, osInput);
 
-    if (!asset) {
+    if (result.ambiguous.length > 0) {
+      // Disambiguation: multiple models matched equally well
+      if (statusMessageId) await deleteMessage(botToken, chatId, statusMessageId);
+      const target = osInput ? `<b>${modelInput}</b> with OS <b>${osInput}</b>` : `<b>${modelInput}</b>`;
+      let message = `🔍 ${target} matched multiple devices. Please specify:\n\n`;
+      for (const c of result.ambiguous) {
+        message += `• <code>${c.model}</code> (${c.os}) — /oki ${c.model} ${c.os}\n`;
+      }
+      await sendMessage(botToken, chatId, message, 'HTML', replyToMessageId, messageThreadId);
+      return;
+    }
+
+    if (!result.asset) {
       const { devices } = getAvailableOKIDevices(release.assets);
       const target = osInput ? `<b>${modelInput}</b> with OS <b>${osInput}</b>` : `<b>${modelInput}</b>`;
       let message = `❌ ${target} not found.\n\n`;
@@ -1580,6 +1743,8 @@ async function handleDownloadOKI(
       await sendMessage(botToken, chatId, message, 'HTML', replyToMessageId, messageThreadId);
       return;
     }
+
+    const asset = result.asset;
 
     // Check file size (Telegram limit: 50MB for bots)
     const maxSize = 50 * 1024 * 1024; // 50MB
