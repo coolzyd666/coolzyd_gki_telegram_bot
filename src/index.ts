@@ -134,41 +134,111 @@ interface OKIDeviceInfo {
 }
 
 // OnePlus device market name / common abbreviation -> codename mapping
-// Users often search by market name (e.g., "oneplus13") instead of codename (e.g., "ACE-5-PRO")
+// Users often search by market name (e.g., "oneplus13") instead of codename
+// IMPORTANT: OP numbered series (OP10/11/12/13/15) and ACE series are DIFFERENT product lines.
+//   - OnePlus 13 ≠ OnePlus Ace 5 Pro (different devices, different kernels)
+//   - OnePlus 12 ≠ OnePlus Ace 3 Pro (different devices, different kernels)
+//   - OnePlus 12R = OnePlus Ace 3 (same device, different regional names) — but separate kernel files exist
 const DEVICE_ALIASES: Record<string, string> = {
-  // OnePlus international numbered series
-  'oneplus13': 'ACE-5-PRO',
-  'op13': 'ACE-5-PRO',
-  'oneplus13r': 'ACE-5',
-  'op13r': 'ACE-5',
-  'oneplus12': 'ACE-3-PRO',
-  'op12': 'ACE-3-PRO',
-  'oneplus12r': 'ACE-3',
-  'op12r': 'ACE-3',
-  'oneplus11': 'ACE-2-PRO',
-  'op11': 'ACE-2-PRO',
-  // OnePlus Ace special editions
+  // ===== OnePlus numbered series (flagship) =====
+  // OP15 family
+  'oneplus15': 'OP15',
+  'op15': 'OP15',
+  'oneplus15r': 'OP15r',
+  'op15r': 'OP15r',
+  'oneplus15t': 'OP15T',
+  'op15t': 'OP15T',
+  // OP13 family
+  'oneplus13': 'OP13',
+  'op13': 'OP13',
+  'oneplus13r': 'OP13r',
+  'op13r': 'OP13r',
+  'oneplus13s': 'OP13S',
+  'op13s': 'OP13S',
+  'oneplus13t': 'OP13T',
+  'op13t': 'OP13T',
+  // OP12 family
+  'oneplus12': 'OP12',
+  'op12': 'OP12',
+  'oneplus12r': 'OP12r',
+  'op12r': 'OP12r',
+  // OP11 family
+  'oneplus11': 'OP11',
+  'op11': 'OP11',
+  'oneplus11r': 'OP11r',
+  'op11r': 'OP11r',
+  // OP10 family
+  'oneplus10pro': 'OP10pro',
+  'op10pro': 'OP10pro',
+  'oneplus10r': 'OP10r',
+  'op10r': 'OP10r',
+  'oneplus10t': 'OP10t',
+  'op10t': 'OP10t',
+
+  // ===== OnePlus Ace series (performance/mid-range) =====
   'oneplusace5racing': 'ACE-5-RACE',
   'oneplusace5race': 'ACE-5-RACE',
   'ace5racing': 'ACE-5-RACE',
+  'ace5race': 'ACE-5-RACE',
   'oneplusace5ultra': 'ACE-5-ULTRA',
   'ace5ultra': 'ACE-5-ULTRA',
-  // OnePlus Open (foldable)
+  'oneplusace5pro': 'ACE-5-PRO',
+  'ace5pro': 'ACE-5-PRO',
+  'oneplusace5': 'ACE-5',
+  'ace5': 'ACE-5',
+  'oneplusace6': 'ACE-6',
+  'ace6': 'ACE-6',
+  'oneplusace6t': 'ACE-6T',
+  'ace6t': 'ACE-6T',
+  'oneplusace3pro': 'ACE-3-PRO',
+  'ace3pro': 'ACE-3-PRO',
+  'oneplusace3v': 'ACE-3V',
+  'ace3v': 'ACE-3V',
+  'oneplusace3': 'ACE-3',
+  'ace3': 'ACE-3',
+  'oneplusace2pro': 'ACE-2-PRO',
+  'ace2pro': 'ACE-2-PRO',
+  'oneplusace2v': 'ACE-2V',
+  'ace2v': 'ACE-2V',
+  'oneplusace2': 'ACE-2',
+  'ace2': 'ACE-2',
+  'oneplusace': 'ACE',
+  'opace': 'ACE',
+  'oneplusacerace': 'ACE-RACE',
+  'opacerace': 'ACE-RACE',
+
+  // ===== OnePlus Open (foldable) =====
   'oneplusopen': 'OPEN',
   'opopen': 'OPEN',
-  // OnePlus Nord
+
+  // ===== OnePlus Nord =====
+  'oneplusnord5': 'NORD-5',
+  'nord5': 'NORD-5',
+  'oneplusnord4': 'NORD-4',
+  'nord4': 'NORD-4',
   'nord4ce': 'NORD-4-CE',
+  'nordce4': 'NORD-4-CE',
   'nordce4lite': 'NORD-CE4-LITE',
   'nordce5': 'NORD-CE-5',
   'nordn30se': 'NORD-N30-SE',
-  // OnePlus Pad
+  'oneplusnord3': 'NORD-3',
+  'nord3': 'NORD-3',
+
+  // ===== OnePlus Pad =====
   'onepluspad2pro': 'PAD-2-PRO',
   'oppad2pro': 'PAD-2-PRO',
   'onepluspad3': 'PAD-3-SM8750',
   'oppad3': 'PAD-3-SM8750',
   'onepluspadpro': 'PAD-PRO',
   'oppadpro': 'PAD-PRO',
-  // OnePlus Turbo
+  'onepluspad2': 'PAD-2-SM8650',
+  'oppad2': 'PAD-2-SM8650',
+  'onepluspadlite': 'PAD-LITE',
+  'oppadlite': 'PAD-LITE',
+  'onepluspadgo2': 'PAD-GO-2',
+  'oppadgo2': 'PAD-GO-2',
+
+  // ===== OnePlus Turbo =====
   'oneplusturbo6': 'TURBO-6',
   'opturbo6': 'TURBO-6',
   'oneplusturbo6v': 'TURBO-6V',
@@ -549,18 +619,38 @@ function extractShaShort(digest: string | undefined): string {
 // ===== OnePlus OKI (OnePlus Kernel) Functions =====
 
 // Extract device info from OnePlus kernel filename
-// Example: AK3_OP-ACE-5-RACE_OOS16_android14-6.1.134_ReSukiSU_34681_SuSFS_v2.1.0.zip
-// Returns: { model: "ACE-5-RACE", os: "OOS16", fullId: "ACE-5-RACE_OOS16" }
+// Two naming patterns exist in releases:
+//   1. Codename series: AK3_OP-ACE-5-RACE_OOS16_android14-6.1.134_... (dash after OP)
+//      Returns: { model: "ACE-5-RACE", os: "OOS16", fullId: "ACE-5-RACE_OOS16" }
+//   2. Numbered series: AK3_OP10pro_OOS14_android12-5.10.209_... (NO dash after OP)
+//      Returns: { model: "OP10pro", os: "OOS14", fullId: "OP10pro_OOS14" }
+//   2b. Numbered with suffix: AK3_OP13-CPH_OOS15_android15-6.6.89_... (dash inside model)
+//      Returns: { model: "OP13-CPH", os: "OOS15", fullId: "OP13-CPH_OOS15" }
 function extractOKIDeviceInfo(filename: string): OKIDeviceInfo | null {
-  // Pattern: AK3_OP-{MODEL}_{OS}_android{VERSION}_...
-  const match = filename.match(/AK3_OP-([A-Z0-9][A-Z0-9.-]*)_([A-Z0-9]+)_android\d+/i);
-  if (match) {
+  // Pattern 1: Codename series — AK3_OP-{MODEL}_{OS}_android{VERSION}_...
+  // Matches: ACE-2-PRO, ACE-3V, NORD-4-CE, PAD-2-SM8650, OPEN, TURBO-6V, etc.
+  const match1 = filename.match(/AK3_OP-([A-Z][A-Z0-9.-]*)_([A-Z0-9]+)_android\d+/i);
+  if (match1) {
     return {
-      model: match[1],
-      os: match[2],
-      fullId: `${match[1]}_${match[2]}`
+      model: match1[1],
+      os: match1[2],
+      fullId: `${match1[1]}_${match1[2]}`
     };
   }
+
+  // Pattern 2: Numbered series — AK3_OP{MODEL}_{OS}_android{VERSION}_...
+  // Matches: OP10pro, OP10r, OP10t, OP11, OP11r, OP12, OP12r,
+  //          OP13, OP13-CPH, OP13-PJZ, OP13r, OP13S, OP13T,
+  //          OP15, OP15r, OP15T, etc.
+  const match2 = filename.match(/AK3_(OP\d+[A-Za-z0-9.-]*)_([A-Z0-9]+)_android\d+/i);
+  if (match2) {
+    return {
+      model: match2[1],
+      os: match2[2],
+      fullId: `${match2[1]}_${match2[2]}`
+    };
+  }
+
   return null;
 }
 
@@ -584,7 +674,7 @@ function extractOSVersion(os: string): number {
 }
 
 // Find matching OKI asset by model and OS (case-insensitive)
-// - Phase 0: Resolve market name aliases (e.g., "oneplus13" → "ACE-5-PRO")
+// - Phase 0: Resolve market name aliases (e.g., "oneplus13" → "OP13", "ace5pro" → "ACE-5-PRO")
 // - Phase 1: Score all assets using scoreModelMatch
 // - Phase 2: Pick the best match; disambiguate if multiple equally-good matches
 // - If osInput is provided: match exact OS (case-insensitive)
@@ -1570,7 +1660,7 @@ async function handleGetOKI(
     await sendMessage(
       botToken,
       chatId,
-      'Please specify a device model. OS version is optional (defaults to latest).\nUsage: <code>/get_oki &lt;model&gt; [os]</code>\n\nExamples:\n• <code>/get_oki ace5race</code> — latest OS\n• <code>/get_oki ace-5-race oos16</code> — specific OS\n• <code>/get_oki ACE-6T OOS16</code>\n• <code>/get_oki oneplus13</code> — market name alias\n\n💡 Model and OS are case-insensitive. Supports aliases like <code>op13</code>, <code>oneplus13</code>, etc.',
+      'Please specify a device model. OS version is optional (defaults to latest).\nUsage: <code>/get_oki &lt;model&gt; [os]</code>\n\nExamples:\n• <code>/get_oki ace5race</code> — latest OS\n• <code>/get_oki ace-5-race oos16</code> — specific OS\n• <code>/get_oki op13</code> — OnePlus 13 (alias)\n• <code>/get_oki OP12r OOS16</code> — OnePlus 12R\n\n💡 Model and OS are case-insensitive. Supports aliases like <code>op13</code>, <code>oneplus13</code>, <code>ace5pro</code>, etc.',
       'HTML',
       replyToMessageId,
       messageThreadId
@@ -1675,7 +1765,7 @@ async function handleDownloadOKI(
     await sendMessage(
       botToken,
       chatId,
-      'Please specify a device model. OS version is optional (defaults to latest).\nUsage: <code>/oki &lt;model&gt; [os]</code>\n\nExamples:\n• <code>/oki ace5race</code> — latest OS\n• <code>/oki ace-5-race oos16</code> — specific OS\n• <code>/oki ACE-6T OOS16</code>\n• <code>/oki op13</code> — market name alias\n\n💡 Model and OS are case-insensitive. Supports aliases like <code>op13</code>, <code>oneplus13</code>, etc.',
+      'Please specify a device model. OS version is optional (defaults to latest).\nUsage: <code>/oki &lt;model&gt; [os]</code>\n\nExamples:\n• <code>/oki ace5race</code> — latest OS\n• <code>/oki ace-5-race oos16</code> — specific OS\n• <code>/oki op13</code> — OnePlus 13 (alias)\n• <code>/oki OP12r OOS16</code> — OnePlus 12R\n• <code>/oki op10pro</code> — OnePlus 10 Pro\n\n💡 Model and OS are case-insensitive. Supports aliases like <code>op13</code>, <code>oneplus13</code>, <code>ace5pro</code>, etc.',
       'HTML',
       replyToMessageId,
       messageThreadId
@@ -2073,7 +2163,8 @@ This bot helps you download GKI kernels with <a href="https://github.com/ReSukiS
 • <code>/get_gki 6.6.66</code> - Get GKI download link
 • <code>/dl 6.1</code> - Download GKI LTS kernel
 • <code>/get_oki ace5race</code> - Get OnePlus (latest OS)
-• <code>/oki ACE-6T OOS16</code> - Download OnePlus (specific OS)
+• <code>/oki op13 OOS16</code> - Download OnePlus 13 (specific OS)
+• <code>/oki op10pro</code> - Download OnePlus 10 Pro
 • <code>/msg @mczihan hello</code> - Send message to a user
 
 💡 All inputs are <b>case-insensitive</b>. OS is optional — defaults to the latest version.`;
