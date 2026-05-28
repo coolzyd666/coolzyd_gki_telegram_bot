@@ -391,6 +391,118 @@ async function getLatestRelease(): Promise<GitHubFetchResult> {
   );
 }
 
+// ===== Release Cache Layer (KV-backed, 30-minute TTL) =====
+
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const CACHE_KEY_GKI = 'cache:gki:release';
+const CACHE_KEY_OKI = 'cache:oki:release';
+
+interface CachedRelease {
+  release: GitHubRelease;
+  cachedAt: number;  // epoch ms
+}
+
+// Get release from cache, or fetch from GitHub if expired/missing
+async function getCachedRelease(
+  kv: KVNamespace,
+  cacheKey: string,
+  fetchFn: () => Promise<GitHubFetchResult>,
+  label: string
+): Promise<GitHubFetchResult> {
+  try {
+    const cached = await kv.get(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached) as CachedRelease;
+      const age = Date.now() - parsed.cachedAt;
+      if (age < CACHE_TTL_MS) {
+        const ageMin = Math.floor(age / 60000);
+        console.log(`${label} cache hit (age: ${ageMin}min)`);
+        return { release: parsed.release, error: null };
+      }
+      console.log(`${label} cache expired (age: ${Math.floor(age / 60000)}min), refreshing...`);
+    }
+  } catch (e) {
+    console.error(`${label} cache read error:`, e);
+  }
+
+  // Cache miss or expired — fetch fresh
+  const result = await fetchFn();
+  if (result.release) {
+    try {
+      const toCache: CachedRelease = {
+        release: result.release,
+        cachedAt: Date.now()
+      };
+      // Use KV put with expiration slightly beyond TTL as safety net
+      await kv.put(cacheKey, JSON.stringify(toCache), { expirationTtl: 3600 }); // 1h hard expiry
+      console.log(`${label} cache updated`);
+    } catch (e) {
+      console.error(`${label} cache write error:`, e);
+    }
+  }
+
+  return result;
+}
+
+// Force refresh cache (delete then fetch)
+async function forceRefreshCache(
+  kv: KVNamespace,
+  cacheKey: string,
+  fetchFn: () => Promise<GitHubFetchResult>,
+  label: string
+): Promise<GitHubFetchResult> {
+  try {
+    await kv.delete(cacheKey);
+  } catch (e) {
+    console.error(`${label} cache delete error:`, e);
+  }
+  const result = await fetchFn();
+  if (result.release) {
+    try {
+      const toCache: CachedRelease = {
+        release: result.release,
+        cachedAt: Date.now()
+      };
+      await kv.put(cacheKey, JSON.stringify(toCache), { expirationTtl: 3600 });
+      console.log(`${label} cache force-refreshed`);
+    } catch (e) {
+      console.error(`${label} cache write error:`, e);
+    }
+  }
+  return result;
+}
+
+// Get cache status info
+async function getCacheStatus(kv: KVNamespace): Promise<{
+  gki: { cached: boolean; age: string; tag: string } | null;
+  oki: { cached: boolean; age: string; tag: string } | null;
+}> {
+  async function checkKey(key: string): Promise<{ cached: boolean; age: string; tag: string } | null> {
+    try {
+      const raw = await kv.get(key);
+      if (!raw) return { cached: false, age: '-', tag: '-' };
+      const parsed = JSON.parse(raw) as CachedRelease;
+      const ageMs = Date.now() - parsed.cachedAt;
+      const ageMin = Math.floor(ageMs / 60000);
+      const ageSec = Math.floor((ageMs % 60000) / 1000);
+      return {
+        cached: ageMs < CACHE_TTL_MS,
+        age: ageMs < CACHE_TTL_MS ? `${ageMin}m${ageSec}s` : `过期 (${ageMin}m)`,
+        tag: parsed.release.tag_name || '-'
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  return {
+    gki: await checkKey(CACHE_KEY_GKI),
+    oki: await checkKey(CACHE_KEY_OKI)
+  };
+}
+
+// ===== End Cache Layer =====
+
 // Normalize user input version for matching
 // Supports: "6.1", "6.1.X", "6.1.X-lts", "6.1.75", etc.
 function normalizeVersion(input: string): string {
@@ -1064,6 +1176,9 @@ async function handleAdmin(
       '• <code>/admin ignorelist</code> — 查看被忽略的群组\n' +
       '• <code>/admin ignore &lt;chatId&gt; [原因]</code> — 忽略群组消息\n' +
       '• <code>/admin unignore &lt;chatId&gt;</code> — 取消忽略群组\n\n' +
+      '📦 缓存管理:\n' +
+      '• <code>/admin cache</code> — 查看缓存状态\n' +
+      '• <code>/admin refresh_cache [gki|oki]</code> — 刷新缓存\n\n' +
       '💡 Chat ID 通常为负数，例如 <code>-1001234567890</code>',
       'HTML', replyToMessageId, messageThreadId
     );
@@ -1328,10 +1443,82 @@ async function handleAdmin(
       }
       break;
     }
+    case 'cache': {
+      // View cache status
+      if (!kv) {
+        await sendMessage(botToken, chatId, '❌ KV 未配置。', 'HTML', replyToMessageId, messageThreadId);
+        break;
+      }
+      const status = await getCacheStatus(kv);
+      let msg = '<b>📦 缓存状态</b>\n\n';
+      msg += '<b>GKI 内核缓存:</b>\n';
+      if (status.gki) {
+        msg += `• 状态: ${status.gki.cached ? '✅ 有效' : '⚠️ 过期/无缓存'}\n`;
+        msg += `• 缓存时间: ${status.gki.age}\n`;
+        msg += `• 版本: <code>${status.gki.tag}</code>\n\n`;
+      } else {
+        msg += '• 无缓存数据\n\n';
+      }
+      msg += '<b>OKI 内核缓存:</b>\n';
+      if (status.oki) {
+        msg += `• 状态: ${status.oki.cached ? '✅ 有效' : '⚠️ 过期/无缓存'}\n`;
+        msg += `• 缓存时间: ${status.oki.age}\n`;
+        msg += `• 版本: <code>${status.oki.tag}</code>\n\n`;
+      } else {
+        msg += '• 无缓存数据\n\n';
+      }
+      msg += `💡 缓存有效期: 30 分钟\n`;
+      msg += `• <code>/admin refresh_cache</code> — 强制刷新所有缓存\n`;
+      msg += `• <code>/admin refresh_cache gki</code> — 仅刷新 GKI\n`;
+      msg += `• <code>/admin refresh_cache oki</code> — 仅刷新 OKI`;
+      await sendMessage(botToken, chatId, msg, 'HTML', replyToMessageId, messageThreadId);
+      break;
+    }
+    case 'refresh_cache': {
+      // Force refresh cache
+      if (!kv) {
+        await sendMessage(botToken, chatId, '❌ KV 未配置。', 'HTML', replyToMessageId, messageThreadId);
+        break;
+      }
+      const target = parts[1]?.toLowerCase(); // gki, oki, or undefined (all)
+      const refreshGKI = !target || target === 'gki';
+      const refreshOKI = !target || target === 'oki';
+
+      if (target && target !== 'gki' && target !== 'oki') {
+        await sendMessage(botToken, chatId, '❌ 参数无效。使用 <code>gki</code>、<code>oki</code> 或留空刷新全部。', 'HTML', replyToMessageId, messageThreadId);
+        break;
+      }
+
+      let msg = '🔄 正在刷新缓存...\n\n';
+      await sendMessage(botToken, chatId, msg, 'HTML', replyToMessageId, messageThreadId);
+
+      const results: string[] = [];
+
+      if (refreshGKI) {
+        const gkiResult = await forceRefreshCache(kv, CACHE_KEY_GKI, getLatestRelease, 'GKI');
+        if (gkiResult.release) {
+          results.push(`✅ GKI: 已刷新 → <code>${gkiResult.release.tag_name}</code>`);
+        } else {
+          results.push(`❌ GKI: 刷新失败 — ${gkiResult.error || 'Unknown error'}`);
+        }
+      }
+
+      if (refreshOKI) {
+        const okiResult = await forceRefreshCache(kv, CACHE_KEY_OKI, getOKILatestRelease, 'OKI');
+        if (okiResult.release) {
+          results.push(`✅ OKI: 已刷新 → <code>${okiResult.release.tag_name}</code>`);
+        } else {
+          results.push(`❌ OKI: 刷新失败 — ${okiResult.error || 'Unknown error'}`);
+        }
+      }
+
+      await sendMessage(botToken, chatId, `<b>📦 缓存刷新完成</b>\n\n${results.join('\n')}`, 'HTML', replyToMessageId, messageThreadId);
+      break;
+    }
     default:
       await sendMessage(
         botToken, chatId,
-        '❌ 未知子命令。可用命令:\n• <code>/admin list</code>\n• <code>/admin add &lt;chatId&gt; [群名]</code>\n• <code>/admin remove &lt;chatId&gt;</code>\n• <code>/admin leaveall [confirm]</code>\n• <code>/admin admins</code>\n• <code>/admin addadmin &lt;userId&gt; [用户名]</code>\n• <code>/admin removeadmin &lt;userId&gt;</code>\n• <code>/admin ignorelist</code>\n• <code>/admin ignore &lt;chatId&gt; [原因]</code>\n• <code>/admin unignore &lt;chatId&gt;</code>',
+        '❌ 未知子命令。可用命令:\n• <code>/admin list</code>\n• <code>/admin add &lt;chatId&gt; [群名]</code>\n• <code>/admin remove &lt;chatId&gt;</code>\n• <code>/admin leaveall [confirm]</code>\n• <code>/admin admins</code>\n• <code>/admin addadmin &lt;userId&gt; [用户名]</code>\n• <code>/admin removeadmin &lt;userId&gt;</code>\n• <code>/admin ignorelist</code>\n• <code>/admin ignore &lt;chatId&gt; [原因]</code>\n• <code>/admin unignore &lt;chatId&gt;</code>\n• <code>/admin cache</code> — 查看缓存状态\n• <code>/admin refresh_cache [gki|oki]</code> — 刷新缓存',
         'HTML', replyToMessageId, messageThreadId
       );
   }
@@ -1384,6 +1571,7 @@ async function sendDocument(
 // Handle /dl command - Download and upload kernel file
 async function handleDownload(
   botToken: string,
+  kv: KVNamespace,
   chatId: number,
   kernelVersion: string | null,
   replyToMessageId?: number,
@@ -1412,7 +1600,7 @@ async function handleDownload(
   );
 
   try {
-    const { release, error: fetchError } = await getLatestRelease();
+    const { release, error: fetchError } = await getCachedRelease(kv, CACHE_KEY_GKI, getLatestRelease, 'GKI');
 
     if (!release) {
       if (statusMessageId) await deleteMessage(botToken, chatId, statusMessageId);
@@ -1544,6 +1732,7 @@ async function handleDownload(
 // Handle /get_gki command
 async function handleGetGKI(
   botToken: string,
+  kv: KVNamespace,
   chatId: number,
   kernelVersion: string | null,
   replyToMessageId?: number,
@@ -1562,7 +1751,7 @@ async function handleGetGKI(
   }
 
   try {
-    const { release, error: fetchError } = await getLatestRelease();
+    const { release, error: fetchError } = await getCachedRelease(kv, CACHE_KEY_GKI, getLatestRelease, 'GKI');
 
     if (!release) {
       await sendMessage(
@@ -1651,6 +1840,7 @@ async function handleGetGKI(
 // Handle /get_oki command - Get download link for OnePlus kernel
 async function handleGetOKI(
   botToken: string,
+  kv: KVNamespace,
   chatId: number,
   args: string | null,
   replyToMessageId?: number,
@@ -1674,7 +1864,7 @@ async function handleGetOKI(
   const osInput = parts.length >= 2 ? parts[1] : null;
 
   try {
-    const { release, error: fetchError } = await getOKILatestRelease();
+    const { release, error: fetchError } = await getCachedRelease(kv, CACHE_KEY_OKI, getOKILatestRelease, 'OKI');
 
     if (!release) {
       await sendMessage(
@@ -1756,6 +1946,7 @@ async function handleGetOKI(
 // Handle /oki command - Download and upload OnePlus kernel file
 async function handleDownloadOKI(
   botToken: string,
+  kv: KVNamespace,
   chatId: number,
   args: string | null,
   replyToMessageId?: number,
@@ -1789,7 +1980,7 @@ async function handleDownloadOKI(
   );
 
   try {
-    const { release, error: fetchError } = await getOKILatestRelease();
+    const { release, error: fetchError } = await getCachedRelease(kv, CACHE_KEY_OKI, getOKILatestRelease, 'OKI');
 
     if (!release) {
       if (statusMessageId) await deleteMessage(botToken, chatId, statusMessageId);
@@ -2177,9 +2368,9 @@ async function handleHelp(botToken: string, chatId: number, replyToMessageId?: n
 }
 
 // Handle /list command
-async function handleList(botToken: string, chatId: number, replyToMessageId?: number, messageThreadId?: number): Promise<void> {
+async function handleList(botToken: string, kv: KVNamespace, chatId: number, replyToMessageId?: number, messageThreadId?: number): Promise<void> {
   try {
-    const { release, error: fetchError } = await getLatestRelease();
+    const { release, error: fetchError } = await getCachedRelease(kv, CACHE_KEY_GKI, getLatestRelease, 'GKI');
 
     if (!release) {
       await sendMessage(
@@ -2322,19 +2513,19 @@ export default {
               await handleHelp(env.BOT_TOKEN, chatId, messageId, threadId);
               break;
             case '/get_gki':
-              await handleGetGKI(env.BOT_TOKEN, chatId, args || null, messageId, threadId);
+              await handleGetGKI(env.BOT_TOKEN, env.KV, chatId, args || null, messageId, threadId);
               break;
             case '/list':
-              await handleList(env.BOT_TOKEN, chatId, messageId, threadId);
+              await handleList(env.BOT_TOKEN, env.KV, chatId, messageId, threadId);
               break;
             case '/dl':
-              await handleDownload(env.BOT_TOKEN, chatId, args || null, messageId, threadId);
+              await handleDownload(env.BOT_TOKEN, env.KV, chatId, args || null, messageId, threadId);
               break;
             case '/get_oki':
-              await handleGetOKI(env.BOT_TOKEN, chatId, args || null, messageId, threadId);
+              await handleGetOKI(env.BOT_TOKEN, env.KV, chatId, args || null, messageId, threadId);
               break;
             case '/oki':
-              await handleDownloadOKI(env.BOT_TOKEN, chatId, args || null, messageId, threadId);
+              await handleDownloadOKI(env.BOT_TOKEN, env.KV, chatId, args || null, messageId, threadId);
               break;
             case '/msg':
               await handleMsg(env.BOT_TOKEN, chatId, args || null, fromUserId, messageId, chatType, messageId, threadId);
@@ -2363,19 +2554,19 @@ export default {
               await handleHelp(env.BOT_TOKEN, chatId, messageId, threadId);
               break;
             case '/get_gki':
-              await handleGetGKI(env.BOT_TOKEN, chatId, args || null, messageId, threadId);
+              await handleGetGKI(env.BOT_TOKEN, env.KV, chatId, args || null, messageId, threadId);
               break;
             case '/list':
-              await handleList(env.BOT_TOKEN, chatId, messageId, threadId);
+              await handleList(env.BOT_TOKEN, env.KV, chatId, messageId, threadId);
               break;
             case '/dl':
-              await handleDownload(env.BOT_TOKEN, chatId, args || null, messageId, threadId);
+              await handleDownload(env.BOT_TOKEN, env.KV, chatId, args || null, messageId, threadId);
               break;
             case '/get_oki':
-              await handleGetOKI(env.BOT_TOKEN, chatId, args || null, messageId, threadId);
+              await handleGetOKI(env.BOT_TOKEN, env.KV, chatId, args || null, messageId, threadId);
               break;
             case '/oki':
-              await handleDownloadOKI(env.BOT_TOKEN, chatId, args || null, messageId, threadId);
+              await handleDownloadOKI(env.BOT_TOKEN, env.KV, chatId, args || null, messageId, threadId);
               break;
             case '/admin':
               // Admin commands not supported in channel posts (no from user)
